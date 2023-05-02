@@ -30,8 +30,8 @@ class SharePointAPI:
         
 
     def getContext(self):
-        #context_auth = AuthenticationContext(self.siteURL)  
-        #context_auth.acquire_token_for_app(self.clientID, self.clientSecret)  
-        return ClientContext(self.siteURL).with_user_credentials(self.username, self.password)
+       client_credentials = ClientCredential(self.clientID,self.clientSecret)
+       return ClientContext(self.siteURL).with_credentials(client_credentials)
+       
     
 SharePointAPI();
