@@ -11,7 +11,7 @@ from pdf_ai_assistant import templates
 from pdf_ai_assistant.knowledge_base.database import Pinecone
 from pdf_ai_assistant.knowledge_base.constructors import PDF, init_extractor, get_file_name
 
-pdf_ext_re = re.compile(r'(*).pdf')
+pdf_ext_re = re.compile(r'(.*\.pdf)')
 
 class AddPDF2DatabaseTool(BaseTool):
     name = "Add to AI assistant vector database"
@@ -25,23 +25,16 @@ class AddPDF2DatabaseTool(BaseTool):
         # get PDF name from input text if exists
         # extract the pdf name
         matches = pdf_ext_re.findall(query)
-        if matches == []:
-            # check we have 'arxiv' and 'paper' terms in query
-            for term in ['arxiv', 'paper']:
-                if term not in query.lower():
-                    # add the terms to the query if not
-                    query = ' '.join([query, term])
-            # try and extract if this is natural language query
-            pdf_name = get_file_name(query)
-        else:
-            pdf_name = matches[0]
+        pdf_name = matches[0]
         # check again for paper ID
         if pdf_name is None:
             return "Mentioned PDF file could not be found."
         # get single PDF object
         pdf = PDF(pdf_name)
         # load the file
-        pdf.load()
+        res = pdf.load()
+        if(res == -1 ):
+            return f"No file found in Google drive with name {pdf_name}"
         # get file metadata
         pdf_metadata = pdf.get_meta()
         # chunk into smaller parts
@@ -54,7 +47,7 @@ class AddPDF2DatabaseTool(BaseTool):
             record = {**record, **pdf_metadata}
             ids.append(f"{record['id']}-{record['chunk-id']}")
             texts.append(record['chunk'])
-            for feature in ['id', 'chunk-id', 'summary', 'authors', 'comment', 'categories', 'journal_ref', 'references', 'doi', 'chunk']:
+            for feature in ['id', 'chunk-id', 'doi', 'chunk']:
                 record.pop(feature)
             metadatas.append(record)
         # add to the database
@@ -69,7 +62,7 @@ class AIHelper:
         "Use this tool when searching for asked information "
         "from our prebuilt vector database. This should be the first "
         "option when looking for information. When recieving information from "
-        "this tool you MUST always include the source as file name and page number of information."
+        "this tool you MUST always include the file name and page number of information."
     )
     sys_msg = (
         "You are an expert summarizer and deliverer of technical information. "
@@ -78,7 +71,7 @@ class AIHelper:
         "incredible. When users ask information you refer to the relevant tools "
         "when needed, allowing you to answer questions about a broad range of "
         "technical topics.\n"
-        "When external information is used you MUST add your sources to the end "
+        "When external information is used you MUST add your the file name and page number to the end "
         "of responses."
     )
     ref_template = templates.reference_extraction['template']
@@ -223,7 +216,7 @@ class AIHelper:
         try:
             outputs = self.retriever._call(inputs)
             # add the sources to the 'answer' value
-            outputs['answer'] = outputs['answer'].replace('\n', ' ') + ' - sources: ' + outputs['sources']
+            outputs['answer'] = outputs['answer'].replace('\n', ' ') + ' - sources: ' #+ outputs['sources']
         except (KeyboardInterrupt, Exception) as e:
             self.retriever.callback_manager.on_chain_error(e, verbose=self.retriever.verbose)
             raise e

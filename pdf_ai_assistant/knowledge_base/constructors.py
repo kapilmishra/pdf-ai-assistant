@@ -11,9 +11,9 @@ from tqdm.auto import tqdm
 
 import logging
 from typing import Union, Any, Optional
-from pdf_ai_assistant.manager import sharepoint
+from pdf_ai_assistant.manager import gdrive
 
-pdf_ext_re = re.compile(r'(*).pdf')
+pdf_ext_re = re.compile(r'(.*\.pdf)')
 
 def retry_request_session(retries: Optional[int] = 5):
     # we setup retry strategy to retry on common errors
@@ -57,7 +57,7 @@ def get_file_name(query: str, handle_not_found: bool = True):
     # init requests search session
     session = retry_request_session()
     # get the search results
-    res = session.get(f"https://www.google.com/search?q={search_term}&sclient=gws-wiz-serp")
+    res = gdrive.GDriveAPI().listPDFFiles()
     try:
         # extract the file name
         file_name = pdf_ext_re.findall(res.text)[0]
@@ -82,7 +82,7 @@ def init_extractor(
     openai_api_key = openai_api_key or os.environ['OPENAI_API_KEY']
     # instantiate the OpenAI API wrapper
     llm = OpenAI(
-        model_name='text-ada-001',
+        model_name='text-davinci-003',
         openai_api_key=openai_api_key,
         max_tokens=max_tokens,
         temperature=0.0
@@ -157,7 +157,7 @@ class PDF:
     PADA: A prompt-based autoregressive approach for adaptation to unseen domains | Eyal Ben-David, Nadav Oved, Roi Reichart
     Language models are few-shot learners | Tom B. Brown, et al. | 2020
 
-    In the References below there are many files. Extract their titles, authors, and years.
+    In the References below there are many files.
 
     References: {refs}
 
@@ -173,7 +173,6 @@ class PDF:
         :type file_name: str
         """
         self.id = file_name
-        self.url = f"https://export.arxiv.org/pdf/{file_name}.pdf"
         # initialize the requests session
         self.session = requests.Session()
     
@@ -183,26 +182,28 @@ class PDF:
         meta data in self.content and other attributes.
         
         :param save: Whether to save the pdf to a local file,
-                     defaults to False
+                     defaults to True
         :type save: bool, optional
         """
         # check if pdf already exists
         if os.path.exists(f'pdf/json/{self.id}.json'):
             print(f'Loading pdf/json/{self.id}.json from file')
-            with open(f'pdf/{self.id}.json', 'r') as fp:
+            with open(f'pdf/json/{self.id}.json', 'r') as fp:
                 attributes = json.loads(fp.read())
             for key, value in attributes.items():
                 setattr(self, key, value)
         else:
-            res = self.session.get(self.url)
-            with open(f'pdf/{self.id}', 'wb') as fp:
-                fp.write(res.content)
-            # extract text content
-            self._convert_pdf_to_text()
-            # get meta for PDF
-            self._download_meta()
-            if save:
-                self.save()
+            if gdrive.GDriveAPI().isPDFFileExists(self.id):
+                gdrive.GDriveAPI().downloadPDFFile(self.id)
+                # extract text content
+                self._convert_pdf_to_text()
+                # get meta for PDF
+                #self._download_meta()
+                if save:
+                    self.save()
+            else:
+                return -1
+            return 0
 
     def get_refs(self, extractor, text_splitter):
         """Get the references for the pdf.
@@ -255,7 +256,7 @@ class PDF:
         attribute.
         """
         text = []
-        with open("temp.pdf", 'rb') as f:
+        with open(f"pdf/{self.id}", 'rb') as f:
             # create a PDF object
             pdf = PyPDF2.PdfReader(f)
             # iterate over every page in the PDF
@@ -267,33 +268,6 @@ class PDF:
         text = "\n".join(text)
         self.content = text
 
-    def _download_meta(self):
-        """Download the meta information for the pdf from the
-        ArXiv API and store it in the self attributes.
-        """
-        search = arxiv.Search(
-            query=f'id:{self.id}',
-            max_results=1,
-            sort_by=arxiv.SortCriterion.SubmittedDate
-        )
-        result = list(search.results())
-        if len(result) == 0:
-            raise ValueError(f"No paper found for paper '{self.id}'")
-        result = result[0]
-        # remove 'v1', 'v2', etc. from the end of the pdf_url
-        result.pdf_url = re.sub(r'v\d+$', '', result.pdf_url)
-        self.authors = [author.name for author in result.authors]
-        self.categories = result.categories
-        self.comment = result.comment
-        self.journal_ref = result.journal_ref
-        self.source = result.pdf_url
-        self.primary_category = result.primary_category
-        self.published = result.published.strftime('%Y%m%d')
-        self.summary = result.summary
-        self.title = result.title
-        self.updated = result.updated.strftime('%Y%m%d')
-        logging.debug(f"Downloaded metadata for paper '{self.id}'")
-
     def save(self):
         """Save the pdf to a local JSON file.
         """
@@ -302,7 +276,7 @@ class PDF:
 
     def save_chunks(
         self,
-        include_metadata: bool = True,
+        include_metadata: bool = False,
         path: str = "chunks"
         ):
         """Save the pdf's chunks to a local JSONL file.
@@ -358,18 +332,8 @@ class PDF:
     def __dict__(self):
         return {
             'id': self.id,
-            'title': self.title,
-            'summary': self.summary,
-            'source': self.source,
-            'authors': self.authors,
-            'categories': self.categories,
-            'comment': self.comment,
-            'journal_ref': self.journal_ref,
-            'primary_category': self.primary_category,
-            'published': self.published,
-            'updated': self.updated,
             'content': self.content,
-            'references': self.references
+             'source' : self.id
         }
     
     def __repr__(self):
